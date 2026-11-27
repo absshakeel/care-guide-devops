@@ -96,7 +96,7 @@ flowchart LR
 flowchart LR
     image["Docker image\nECR / local registry"] --> deploy["Deployment\n2 replicas\nrolling update"]
     deploy --> svc["Service\nClusterIP :80"]
-    svc --> ingress["Ingress\nnginx / ALB on EKS"]
+    svc --> ingress["Ingress\nnginx / ALB (EKS target)"]
     hpa["HPA\ncpu > 70%\nmin=2 max=10"] --> deploy
     cm["ConfigMap\nenv vars"] --> deploy
     secret["Secret\ncredentials"] --> deploy
@@ -946,7 +946,7 @@ These require credentials, cloud spending, or a decision that is out of scope fo
 3. **Apply the environments** — `terraform plan` then `terraform apply` for staging, then production, after reviewing the plan. Staging must be applied first because it creates the account's GitHub OIDC provider; pass its `github_oidc_provider_arn` output to production as `oidc_provider_arn`.
 4. **Populate the GitHub secret and variables** listed above from the Terraform outputs.
 5. **Run the workflows** once on a real pull request and once on `main` to exercise the OIDC → ECR → SSM → smoke-test path end to end. This is the largest untested surface in the submission.
-6. **Deploy to a shared cluster** — the local minikube rehearsal is captured above; repeat it against the EKS cluster from `terraform/environments/production` (or `kind` for a quick check) to confirm the same `2/2 Running` and zero-downtime behaviour on the target infrastructure.
+6. **Deploy to a shared cluster** — the local minikube rehearsal is captured above. `terraform/environments/production` provisions a single EC2 instance for the SSM-based deploy path, not a cluster, so repeating the Kubernetes rehearsal on shared infrastructure requires an EKS cluster that is out of scope for this Terraform code — see the EKS differences table above and the EKS migration item under Improvements.
 7. **Install the systemd timer** on a Linux host if you want unattended checks — copy the units from `systemd/` as shown above and confirm `systemctl list-timers` shows the schedule.
 8. **Rotate the Grafana password** — the default `change_me_before_deploy` in `.env.example` must not reach a shared host.
 9. **Fill in the repository URL** in this README's clone step once the repository is public.
