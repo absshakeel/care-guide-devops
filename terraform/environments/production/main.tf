@@ -57,6 +57,12 @@ variable "github_repo" {
   type = string
 }
 
+variable "oidc_provider_arn" {
+  description = "ARN of the GitHub OIDC provider created by the staging stack. Leave empty to look it up by URL."
+  type        = string
+  default     = ""
+}
+
 data "aws_vpc" "default" {
   default = true
 }
@@ -109,11 +115,23 @@ module "app_ec2" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# GitHub OIDC role
+# ---------------------------------------------------------------------------
+# Only one GitHub OIDC provider may exist per AWS account. Staging creates it
+# (create_oidc_provider = true) and production reuses the same provider. Pass
+# the staging provider ARN here to skip even the lookup:
+#
+#   oidc_provider_arn = module.oidc.oidc_provider_arn   # from the staging stack
+#
 module "oidc" {
   source      = "../../modules/oidc"
   github_org  = var.github_org
   github_repo = var.github_repo
   role_name   = "careguide-github-actions-${var.environment}"
+
+  create_oidc_provider = false
+  provider_arn         = var.oidc_provider_arn
 
   ecr_repository_arns = [module.ecr.repository_arn]
   ec2_instance_arns   = ["arn:aws:ec2:${var.aws_region}:*:instance/${module.app_ec2.instance_id}"]
@@ -133,6 +151,12 @@ output "ec2_instance_id" {
 }
 
 output "github_oidc_role_arn" {
-  value = module.oidc.role_arn
+  description = "Set as AWS_OIDC_ROLE_ARN GitHub Actions secret"
+  value       = module.oidc.role_arn
+}
+
+output "github_oidc_provider_arn" {
+  description = "Shared GitHub OIDC provider ARN (created by the staging stack)"
+  value       = module.oidc.oidc_provider_arn
 }
 

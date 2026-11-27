@@ -45,7 +45,7 @@ devopstask/
 │   ├── modules/
 │   │   ├── ecr/                  Repository, immutable tags, scan on push, lifecycle
 │   │   ├── ec2/                  Instance, security group (no port 22), IAM, CloudWatch
-│   │   └── oidc/                 GitHub OIDC provider + least-privilege role
+│   │   └── oidc/                 GitHub OIDC role; provider created once per account
 │   └── environments/
 │       ├── staging/              Single instance environment
 │       └── production/           Larger instance, longer retention
@@ -433,7 +433,36 @@ After approval:
 
 ```bash
 terraform apply staging.tfplan
+
+# Keep this value: production reuses the same provider (see below).
+terraform output -raw github_oidc_provider_arn
 ```
+
+### Initialize and plan production
+
+```bash
+cd terraform/environments/production
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars: set ami_id, github_org, github_repo.
+# Set oidc_provider_arn to the staging output above (recommended), or leave it
+# empty and the module looks the provider up by URL.
+
+terraform init \
+  -backend-config="bucket=careguide-devops-tfstate-ACCOUNT_ID" \
+  -backend-config="region=us-east-1"
+
+terraform plan -var-file="terraform.tfvars" -out=production.tfplan
+terraform apply production.tfplan
+```
+
+#### One OIDC provider per account
+
+AWS allows **one** `token.actions.githubusercontent.com` OIDC provider per
+account. Staging therefore owns it (`create_oidc_provider = true`) and
+production reuses it (`create_oidc_provider = false`) — either by looking it up
+with a data source or, preferably, by receiving `oidc_provider_arn` from the
+staging stack. Applying two independent providers into the same account fails
+with `EntityAlreadyExists`.
 
 ### Destroy infrastructure
 
@@ -868,7 +897,7 @@ the evidence is command output from this session, or whether the item could not 
 | 9 | Pull-request CI workflow | `.github/workflows/ci.yml` | YAML parses; jobs lint/test/Hadolint/ShellCheck/Trivy defined | ⚠️ Never run on GitHub |
 | 10 | Secure release workflow with OIDC | `.github/workflows/release-deploy.yml` | OIDC auth, multi-arch build, SSM deploy, smoke test, rollback | ⚠️ Never run on GitHub / no AWS |
 | 11 | Terraform modules | `terraform/modules/{ecr,ec2,oidc}` | `terraform fmt -check` clean, `terraform validate` successful | ✅ Verified (validate only) |
-| 12 | Terraform environments + remote state | `terraform/environments/{staging,production}`, `terraform/bootstrap` | `fmt` clean, `validate` successful for all configs | ✅ Verified (no `plan`/`apply`) |
+| 12 | Terraform environments + remote state | `terraform/environments/{staging,production}`, `terraform/bootstrap` | `fmt` clean, `validate` successful for all configs. OIDC provider deduplicated across the two environments (`create_oidc_provider` / `provider_arn`) — one provider per account | ✅ Verified (no `plan`/`apply`) |
 | 13 | Terraform plan evidence | — | **Not produced.** No AWS credentials or account access in this environment | ❌ Not verified |
 | 14 | Kubernetes manifests | `k8s/` (namespace, configmap, secret, deployment, service, hpa, ingress) | `kubeconform -strict`: 7 found, 7 valid, 0 invalid | ✅ Schema-validated |
 | 15 | Deployment, rolling update, rollback evidence | `k8s/deployment.yaml` (RollingUpdate, `preStop`, probes), `k8s/configmap.yaml` | Live minikube v1.35.1: `21,228` requests, `0` failures across the `0.1.0`→`0.2.0` rollout; `rollout undo` returned the Deployment to the prior ReplicaSet | ✅ Verified |
@@ -914,7 +943,7 @@ These require credentials, cloud spending, or a decision that is out of scope fo
 
 1. **Publish the repository** to GitHub, then repeat `git remote add origin <url>` and `git push -u origin main`. No remote is configured today.
 2. **Bootstrap Terraform state** — create the S3 bucket with `terraform/bootstrap`, using real AWS credentials. Locking uses the S3 backend's native `use_lockfile = true`, so no DynamoDB table is required.
-3. **Apply the environments** — `terraform plan` then `terraform apply` for staging, then production, after reviewing the plan.
+3. **Apply the environments** — `terraform plan` then `terraform apply` for staging, then production, after reviewing the plan. Staging must be applied first because it creates the account's GitHub OIDC provider; pass its `github_oidc_provider_arn` output to production as `oidc_provider_arn`.
 4. **Populate the GitHub secret and variables** listed above from the Terraform outputs.
 5. **Run the workflows** once on a real pull request and once on `main` to exercise the OIDC → ECR → SSM → smoke-test path end to end. This is the largest untested surface in the submission.
 6. **Deploy to a shared cluster** — the local minikube rehearsal is captured above; repeat it against the EKS cluster from `terraform/environments/production` (or `kind` for a quick check) to confirm the same `2/2 Running` and zero-downtime behaviour on the target infrastructure.

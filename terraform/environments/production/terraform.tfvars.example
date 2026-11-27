@@ -6,3 +6,8 @@ allowed_ingress_cidrs = ["0.0.0.0/0"]   # restrict to known CIDRs in real produc
 github_org            = "YOUR_GITHUB_ORG"
 github_repo           = "devops-task"
 
+# Optional. The account's GitHub OIDC provider is created by the staging stack.
+# Leave empty to look it up by URL, or paste `terraform output -raw
+# github_oidc_provider_arn` from staging to avoid a data-source lookup.
+oidc_provider_arn = ""
+

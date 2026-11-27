@@ -30,6 +30,23 @@ variable "role_name" {
   default     = "github-actions-oidc"
 }
 
+variable "create_oidc_provider" {
+  description = <<-EOT
+    Whether this module creates the GitHub OIDC provider. An account may hold
+    only one provider for a given URL, so exactly one environment must set this
+    to true; every other environment reuses the existing provider via a data
+    source. Ignored when provider_arn is set.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "provider_arn" {
+  description = "ARN of an existing GitHub OIDC provider. When set, the provider is neither created nor looked up."
+  type        = string
+  default     = ""
+}
+
 variable "ecr_repository_arns" {
   description = "ECR repositories the role may push to"
   type        = list(string)
@@ -48,11 +65,28 @@ variable "tags" {
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+locals {
+  # A provider ARN passed in always wins; otherwise either create the provider
+  # or look up the one another environment already created. `one(splat)` yields
+  # null for the branch that has count = 0, so no invalid index is evaluated.
+  created_provider_arn  = var.provider_arn == "" && var.create_oidc_provider ? one(aws_iam_openid_connect_provider.github[*].arn) : null
+  existing_provider_arn = var.provider_arn == "" && !var.create_oidc_provider ? one(data.aws_iam_openid_connect_provider.github[*].arn) : null
+  provider_arn          = var.provider_arn != "" ? var.provider_arn : coalesce(local.created_provider_arn, local.existing_provider_arn)
+}
+
 # OIDC provider for GitHub Actions (one per AWS account, shared across repos)
 resource "aws_iam_openid_connect_provider" "github" {
+  count = var.provider_arn == "" && var.create_oidc_provider ? 1 : 0
+
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+}
+
+data "aws_iam_openid_connect_provider" "github" {
+  count = var.provider_arn == "" && !var.create_oidc_provider ? 1 : 0
+
+  url = "https://token.actions.githubusercontent.com"
 }
 
 resource "aws_iam_role" "github_actions" {
@@ -63,7 +97,7 @@ resource "aws_iam_role" "github_actions" {
     Statement = [{
       Effect = "Allow"
       Principal = {
-        Federated = aws_iam_openid_connect_provider.github.arn
+        Federated = local.provider_arn
       }
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
@@ -135,3 +169,7 @@ output "role_arn" {
   value       = aws_iam_role.github_actions.arn
 }
 
+output "oidc_provider_arn" {
+  description = "ARN of the GitHub OIDC provider used by this role. Pass this as provider_arn to other environments in the same account."
+  value       = local.provider_arn
+}

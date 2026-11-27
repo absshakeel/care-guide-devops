@@ -134,6 +134,9 @@ module "oidc" {
   github_repo = var.github_repo
   role_name   = "careguide-github-actions-${var.environment}"
 
+  # Staging owns the account's GitHub OIDC provider; production reuses it.
+  create_oidc_provider = true
+
   ecr_repository_arns = [module.ecr.repository_arn]
   ec2_instance_arns   = ["arn:aws:ec2:${var.aws_region}:*:instance/${module.app_ec2.instance_id}"]
 
