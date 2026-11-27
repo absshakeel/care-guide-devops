@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=74"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta:__legacy__"
 
 [project]
 name = "careguide-devops-app"
@@ -23,6 +23,13 @@ dev = [
     "httpx==0.28.0",
     "ruff==0.8.1",
 ]
+
+# The repository root is a flat layout containing k8s/, monitoring/, systemd/,
+# scripts/ and terraform/ alongside app/. Setuptools refuses to guess in that
+# situation, so the single importable package is declared explicitly instead of
+# relying on automatic discovery.
+[tool.setuptools]
+packages = ["app"]
 
 [tool.ruff]
 line-length = 100
