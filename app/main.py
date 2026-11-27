@@ -53,9 +53,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Handle application startup and graceful shutdown."""
     logger.info("Application starting", extra={"version": APP_VERSION, "environment": ENVIRONMENT})
 
-    # Register SIGTERM handler so the container shuts down cleanly
+    # Log SIGTERM without replacing the handler uvicorn installs for its own
+    # graceful shutdown. signal.signal() would override it, so hook in and
+    # delegate to whatever was registered before us.
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
     def _handle_sigterm(signum: int, frame: types.FrameType | None) -> None:
         logger.info("SIGTERM received — initiating graceful shutdown")
+        if callable(previous_sigterm):
+            previous_sigterm(signum, frame)
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
 

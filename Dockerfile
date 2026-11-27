@@ -3,23 +3,20 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — build: install dependencies into a clean venv
 # ---------------------------------------------------------------------------
-FROM python:3.12.7-alpine3.20 AS builder
+FROM python:3.12.9-alpine3.21 AS builder
 
 WORKDIR /build
 
-# System build dependencies (only needed during build)
-RUN apk add --no-cache gcc musl-dev libffi-dev
-
-# Create isolated virtual environment
-RUN python -m venv /venv
+# System build dependencies and isolated virtual environment
+RUN apk add --no-cache gcc musl-dev libffi-dev \
+ && python -m venv /venv
 ENV PATH="/venv/bin:$PATH"
 
 # Copy dependency manifest first to maximise layer cache reuse
 COPY pyproject.toml .
 
 # Install only production dependencies (no dev extras)
-RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir \
+RUN pip install --no-cache-dir \
         "fastapi==0.115.5" \
         "uvicorn[standard]==0.32.1" \
         "prometheus-client==0.21.1" \
@@ -28,7 +25,10 @@ RUN pip install --no-cache-dir --upgrade pip \
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime: minimal Alpine image, non-root user
 # ---------------------------------------------------------------------------
-FROM python:3.12.7-alpine3.20 AS runtime
+FROM python:3.12.9-alpine3.21 AS runtime
+
+# Patch any OS-level CVEs in the base image
+RUN apk upgrade --no-cache
 
 # OCI image labels
 LABEL org.opencontainers.image.title="careguide-devops-app" \
@@ -59,8 +59,10 @@ ENV PORT=8080 \
 
 EXPOSE 8080
 
-# Health check: probe /health every 30 s, allow 5 s start-up grace
+# Health check: probe /health every 30 s, allow 5 s start-up grace.
+# Use 127.0.0.1 rather than "localhost" — Alpine resolves localhost to ::1,
+# while uvicorn binds the IPv4 wildcard only, so "localhost" gets ECONNREFUSED.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:${PORT}/health || exit 1
+    CMD wget -qO- http://127.0.0.1:${PORT}/health || exit 1
 
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --log-level ${LOG_LEVEL}"]

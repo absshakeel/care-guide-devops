@@ -27,8 +27,11 @@ def configure_logging() -> None:
     root.handlers.clear()
     root.addHandler(handler)
 
-    # Suppress noisy uvicorn access log — we log requests ourselves
+    # Suppress uvicorn's own access log — the middleware above emits a
+    # structured JSON line per request, so the plain-text duplicate is noise.
     logging.getLogger("uvicorn.access").propagate = False
+    logging.getLogger("uvicorn.access").handlers.clear()
+    logging.getLogger("uvicorn.access").disabled = True
     logging.getLogger("uvicorn.error").propagate = True
 
     logging.getLogger(__name__).info(
