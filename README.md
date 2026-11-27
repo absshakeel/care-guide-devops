@@ -936,7 +936,9 @@ The Docker socket mount is the most sensitive grant in the repository: socket ac
 
 ## AWS cost estimate
 
-Assumed region: **us-east-1**. Estimated monthly costs for the staging environment:
+Assumed region: **us-east-1**. Estimated monthly costs for the staging environment (t3.micro, what
+`terraform/environments/staging` provisions). The production stack sizes its instance as t3.small, so
+its steady-state cost is roughly \$17/month rather than the figure below.
 
 | Service | Configuration | Estimated cost/month |
 |---------|--------------|----------------------|
@@ -1023,7 +1025,8 @@ on another account.
 | Bootstrap Terraform state in S3 (native `use_lockfile = true`, no DynamoDB table) | ✅ Done |
 | `terraform apply` for staging, then production (staging first — it creates the account's OIDC provider, whose ARN is passed to production as `oidc_provider_arn`) | ✅ Done — both plans now report "No changes" |
 | Populate the GitHub secret and variables from the Terraform outputs | ✅ Done — on the `production` environment |
-| Run the workflows on a real pull request and on `main` (OIDC → ECR → SSM → smoke test) | ✅ Done — runs `46059024569` (PR) and `46055719256` (release) |
+| Run the workflows on a real pull request and on `main` (OIDC → ECR → SSM → smoke test) | ✅ Done — runs `46059024569` (PR) and `46055719256` (release), plus `46059757032` and `46060327947` after the history rewrite |
+| Deploy the application to the staging instance | ⏳ Not done — `terraform/environments/staging` is applied (EC2, ECR, IAM role all live), but `release-deploy.yml` targets the **`production`** GitHub Environment and deploys only to `i-08ff1a93f741d3d97`. The staging ECR repository is therefore empty and `i-0bdec281e54876edc:8080` has nothing listening. Add a second workflow (or a matrix over both environments) to exercise a real staging promotion |
 | Deploy to a shared cluster | ⏳ Not done — the local minikube rehearsal is captured above. `terraform/environments/production` provisions a single EC2 instance for the SSM deploy path, not a cluster; repeating the Kubernetes rehearsal on shared infrastructure needs an EKS cluster, which is out of scope for this Terraform code — see the EKS differences table and the EKS migration item under Improvements |
 | Install the systemd timer on a Linux host | ⏳ Not done — copy the units from `systemd/` and confirm `systemctl list-timers` shows the schedule |
 | Rotate the Grafana password | ⏳ Before any shared deployment — the default `change_me_before_deploy` in `.env.example` must not reach a shared host |
