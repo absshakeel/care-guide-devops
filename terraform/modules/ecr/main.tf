@@ -16,6 +16,16 @@ variable "repository_name" {
   type        = string
 }
 
+variable "force_delete" {
+  description = <<-EOT
+    Delete the repository even when it still holds images. Only needed for
+    disposable environments; leave false so a stray destroy cannot wipe the
+    images a running instance depends on.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "image_tag_mutability" {
   description = "IMMUTABLE prevents tag overwriting"
   type        = string
@@ -36,6 +46,7 @@ variable "tags" {
 resource "aws_ecr_repository" "this" {
   name                 = var.repository_name
   image_tag_mutability = var.image_tag_mutability
+  force_delete         = var.force_delete
 
   image_scanning_configuration {
     scan_on_push = true

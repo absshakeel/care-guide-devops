@@ -76,7 +76,7 @@ data "aws_subnets" "default" {
 
 module "ecr" {
   source          = "../../modules/ecr"
-  repository_name = "careguide-devops-app"
+  repository_name = "careguide-devops-app-${var.environment}"
   tags = {
     Environment = var.environment
     Project     = "careguide-devops"

@@ -704,7 +704,7 @@ Triggered on push to `main` or `v*.*.*` tags.
 | Variable | Example |
 |----------|---------|
 | `AWS_REGION` | `us-east-1` |
-| `ECR_REPOSITORY` | `careguide-devops-app` |
+| `ECR_REPOSITORY` | `careguide-devops-app-production` |
 | `EC2_INSTANCE_ID` | `i-0abc123def456` |
 
 ---
@@ -821,13 +821,13 @@ If the smoke test fails, the release workflow automatically issues another SSM c
 
 ```bash
 # Find the previous SHA tag in ECR
-aws ecr list-images --repository-name careguide-devops-app --filter tagStatus=TAGGED
+aws ecr list-images --repository-name careguide-devops-app-production --filter tagStatus=TAGGED
 
 # Roll back manually via SSM
 aws ssm send-command \
   --instance-ids "i-0abc123def456" \
   --document-name "AWS-RunShellScript" \
-  --parameters '{"commands":["docker stop careguide-app; docker rm careguide-app; docker run -d --name careguide-app --restart unless-stopped -p 8080:8080 ACCOUNT.dkr.ecr.REGION.amazonaws.com/careguide-devops-app:sha-PREVIOUS_SHA"]}'
+  --parameters '{"commands":["docker stop careguide-app; docker rm careguide-app; docker run -d --name careguide-app --restart unless-stopped -p 8080:8080 ACCOUNT.dkr.ecr.REGION.amazonaws.com/careguide-devops-app-production:sha-PREVIOUS_SHA"]}'
 ```
 
 ---
@@ -934,7 +934,7 @@ No AWS access keys are stored — the release workflow assumes the role through 
 | Variable | Example | Notes |
 |----------|---------|-------|
 | `AWS_REGION` | `us-east-1` | Must match the Terraform region |
-| `ECR_REPOSITORY` | `careguide-devops-app` | Created by `terraform/modules/ecr` |
+| `ECR_REPOSITORY` | `careguide-devops-app-production` | Created by `terraform/modules/ecr`. The name is environment-scoped (`careguide-devops-app-<env>`) so the two stacks do not fight over one repository |
 | `EC2_INSTANCE_ID` | `i-0abc123def456` | Output of `terraform/modules/ec2`; target for SSM |
 
 ### Remaining manual steps
