@@ -58,6 +58,16 @@ variable "github_repo" {
   type = string
 }
 
+variable "create_oidc_provider" {
+  description = <<-EOT
+    Whether this stack creates the account's GitHub OIDC provider. Set to false
+    when the account already has one for token.actions.githubusercontent.com —
+    creating a second fails with EntityAlreadyExists.
+  EOT
+  type        = bool
+  default     = true
+}
+
 # ---------------------------------------------------------------------------
 # Data sources
 # ---------------------------------------------------------------------------
@@ -135,8 +145,10 @@ module "oidc" {
   github_repo = var.github_repo
   role_name   = "careguide-github-actions-${var.environment}"
 
-  # Staging owns the account's GitHub OIDC provider; production reuses it.
-  create_oidc_provider = true
+  # Only one GitHub OIDC provider may exist per account. Set
+  # create_oidc_provider = false when the account already has one (the usual
+  # case when another project or repository created it first).
+  create_oidc_provider = var.create_oidc_provider
 
   ecr_repository_arns = [module.ecr.repository_arn]
   ec2_instance_arns   = ["arn:aws:ec2:${var.aws_region}:*:instance/${module.app_ec2.instance_id}"]

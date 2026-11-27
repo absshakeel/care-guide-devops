@@ -57,6 +57,16 @@ variable "github_repo" {
   type = string
 }
 
+variable "create_oidc_provider" {
+  description = <<-EOT
+    Whether this stack creates the account's GitHub OIDC provider. Defaults to
+    false because an account holds only one provider per URL and it is normally
+    owned by whichever stack was applied first.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "oidc_provider_arn" {
   description = "ARN of the GitHub OIDC provider created by the staging stack. Leave empty to look it up by URL."
   type        = string
@@ -130,7 +140,7 @@ module "oidc" {
   github_repo = var.github_repo
   role_name   = "careguide-github-actions-${var.environment}"
 
-  create_oidc_provider = false
+  create_oidc_provider = var.create_oidc_provider
   provider_arn         = var.oidc_provider_arn
 
   ecr_repository_arns = [module.ecr.repository_arn]
@@ -156,7 +166,7 @@ output "github_oidc_role_arn" {
 }
 
 output "github_oidc_provider_arn" {
-  description = "Shared GitHub OIDC provider ARN (created by the staging stack)"
+  description = "GitHub OIDC provider ARN in use (created or looked up by this stack)"
   value       = module.oidc.oidc_provider_arn
 }
 

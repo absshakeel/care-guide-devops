@@ -433,7 +433,7 @@ After approval:
 ```bash
 terraform apply staging.tfplan
 
-# Keep this value: production reuses the same provider (see below).
+# The provider ARN in use (created by this stack, or reused — see below).
 terraform output -raw github_oidc_provider_arn
 ```
 
@@ -457,11 +457,15 @@ terraform apply production.tfplan
 #### One OIDC provider per account
 
 AWS allows **one** `token.actions.githubusercontent.com` OIDC provider per
-account. Staging therefore owns it (`create_oidc_provider = true`) and
-production reuses it (`create_oidc_provider = false`) — either by looking it up
-with a data source or, preferably, by receiving `oidc_provider_arn` from the
-staging stack. Applying two independent providers into the same account fails
-with `EntityAlreadyExists`.
+account, and it is not scoped to a repository — an unrelated project may have
+created it already. Set `create_oidc_provider = true` in **at most one** stack;
+every other stack sets it to `false` and reuses the existing provider, either by
+looking it up with a data source or by receiving `oidc_provider_arn` directly.
+Applying two providers into one account fails with `EntityAlreadyExists`.
+
+Both examples ship with `create_oidc_provider = false` and the values already
+filled in for this account. Set it to `true` in staging only on a clean account
+with no provider yet.
 
 ### Destroy infrastructure
 
