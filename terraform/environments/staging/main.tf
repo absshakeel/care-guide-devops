@@ -164,3 +164,8 @@ output "github_oidc_role_arn" {
   value       = module.oidc.role_arn
 }
 
+output "github_oidc_provider_arn" {
+  description = "Shared GitHub OIDC provider ARN. Pass this as oidc_provider_arn to the production stack."
+  value       = module.oidc.oidc_provider_arn
+}
+

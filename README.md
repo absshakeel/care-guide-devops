@@ -153,10 +153,9 @@ AWS CLI v2 is required for Terraform operations.
 ### Set up environment
 
 ```bash
-# Clone the repository (no public remote is configured for this submission;
-# use the path you received it at, e.g. cd devopstask)
-git clone <repository-url>
-cd devopstask
+# Clone the repository
+git clone https://github.com/absshakeel/care-guide-devops.git
+cd care-guide-devops
 
 # Copy environment template
 cp .env.example .env
@@ -941,7 +940,7 @@ No AWS access keys are stored — the release workflow assumes the role through 
 
 These require credentials, cloud spending, or a decision that is out of scope for automated setup:
 
-1. **Publish the repository** to GitHub, then repeat `git remote add origin <url>` and `git push -u origin main`. No remote is configured today.
+1. **Publish the repository** to GitHub. The remote is already configured as `origin` → `https://github.com/absshakeel/care-guide-devops.git`; push with `git push -u origin main`.
 2. **Bootstrap Terraform state** — create the S3 bucket with `terraform/bootstrap`, using real AWS credentials. Locking uses the S3 backend's native `use_lockfile = true`, so no DynamoDB table is required.
 3. **Apply the environments** — `terraform plan` then `terraform apply` for staging, then production, after reviewing the plan. Staging must be applied first because it creates the account's GitHub OIDC provider; pass its `github_oidc_provider_arn` output to production as `oidc_provider_arn`.
 4. **Populate the GitHub secret and variables** listed above from the Terraform outputs.
@@ -949,7 +948,7 @@ These require credentials, cloud spending, or a decision that is out of scope fo
 6. **Deploy to a shared cluster** — the local minikube rehearsal is captured above. `terraform/environments/production` provisions a single EC2 instance for the SSM-based deploy path, not a cluster, so repeating the Kubernetes rehearsal on shared infrastructure requires an EKS cluster that is out of scope for this Terraform code — see the EKS differences table above and the EKS migration item under Improvements.
 7. **Install the systemd timer** on a Linux host if you want unattended checks — copy the units from `systemd/` as shown above and confirm `systemctl list-timers` shows the schedule.
 8. **Rotate the Grafana password** — the default `change_me_before_deploy` in `.env.example` must not reach a shared host.
-9. **Fill in the repository URL** in this README's clone step once the repository is public.
+9. **Fill in the repository URL** — already set to `https://github.com/absshakeel/care-guide-devops.git` in the clone step above.
 
 ---
 

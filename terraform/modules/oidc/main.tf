@@ -20,7 +20,7 @@ variable "github_org" {
 }
 
 variable "github_repo" {
-  description = "GitHub repository name (e.g. devops-task)"
+  description = "GitHub repository name (e.g. care-guide-devops)"
   type        = string
 }
 

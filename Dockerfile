@@ -38,7 +38,7 @@ ARG APP_VERSION=0.1.0
 LABEL org.opencontainers.image.title="careguide-devops-app" \
       org.opencontainers.image.description="FastAPI service for Care Guide DevOps assessment" \
       org.opencontainers.image.version="${APP_VERSION}" \
-      org.opencontainers.image.source="https://github.com/careguide/devops-task" \
+      org.opencontainers.image.source="https://github.com/absshakeel/care-guide-devops" \
       org.opencontainers.image.licenses="MIT"
 
 WORKDIR /app
