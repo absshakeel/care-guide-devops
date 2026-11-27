@@ -20,8 +20,11 @@ htmlcov/
 
 # Environment
 .env
+.env.*
 *.env.local
+*.env.staging
 *.env.production
+!*.env.example
 
 # Terraform
 .terraform/
@@ -31,6 +34,8 @@ htmlcov/
 *.tfplan
 terraform.tfvars
 terraform/bootstrap/bootstrap.tfvars
+*.tfvars
+*.auto.tfvars
 !*.tfvars.example
 override.tf
 override.tf.json
