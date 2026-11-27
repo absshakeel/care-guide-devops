@@ -756,15 +756,32 @@ Triggered on push to `main` or `v*.*.*` tags.
 
 | Secret | Description |
 |--------|-------------|
-| `AWS_OIDC_ROLE_ARN` | ARN of the IAM role created by `terraform/modules/oidc` |
+| `AWS_OIDC_ROLE_ARN` | ARN of the IAM role created by `terraform/modules/oidc`, e.g. `arn:aws:iam::020947422426:role/careguide-github-actions-production` |
 
-**Repository variables:**
+This secret is scoped to the **`production` GitHub Environment**, not the repository, so only the release
+job can read it. Both workflows also need `permissions: id-token: write`.
+
+**Repository variables** (also on the `production` environment):
 
 | Variable | Example |
 |----------|---------|
 | `AWS_REGION` | `us-east-1` |
 | `ECR_REPOSITORY` | `careguide-devops-app-production` |
-| `EC2_INSTANCE_ID` | `i-0abc123def456` |
+| `EC2_INSTANCE_ID` | `i-08ff1a93f741d3d97` |
+| `APP_PORT` | `8080` |
+
+The IAM trust policy must accept the OIDC subject GitHub actually issues. GitHub embeds the immutable
+numeric owner and repository IDs, so the subject is
+`repo:absshakeel@105621292/care-guide-devops@1474774727:environment:production` — not the plain
+`repo:absshakeel/care-guide-devops:environment:production` shown in most examples. The trust policy
+matches on both forms with a `StringLike` condition:
+
+```
+"token.actions.githubusercontent.com:sub": [
+  "repo:${github_org}/${github_repo}:*",
+  "repo:${github_org}@*/${github_repo}@*:*"
+]
+```
 
 ---
 
@@ -953,11 +970,11 @@ the evidence is command output from this session, or whether the item could not 
 | 6 | Container image vulnerability scan | Trivy (CI + local) | `0` vulnerabilities, `0` CRITICAL | ✅ Verified |
 | 7 | Container health check | `Dockerfile` `HEALTHCHECK` + compose | Container reaches `(healthy)` | ✅ Verified |
 | 8 | Graceful shutdown | SIGTERM delegation in `app/main.py` | `docker stop` completes in `0.65 s` (was `30.76 s` forced kill) | ✅ Verified |
-| 9 | Pull-request CI workflow | `.github/workflows/ci.yml` | YAML parses; jobs lint/test/Hadolint/ShellCheck/Trivy defined | ⚠️ Never run on GitHub |
-| 10 | Secure release workflow with OIDC | `.github/workflows/release-deploy.yml` | OIDC auth, multi-arch build, SSM deploy, smoke test, rollback | ⚠️ Never run on GitHub / no AWS |
-| 11 | Terraform modules | `terraform/modules/{ecr,ec2,oidc}` | `terraform fmt -check` clean, `terraform validate` successful | ✅ Verified (validate only) |
-| 12 | Terraform environments + remote state | `terraform/environments/{staging,production}`, `terraform/bootstrap` | `fmt` clean, `validate` successful for all configs. OIDC provider deduplicated across the two environments (`create_oidc_provider` / `provider_arn`) — one provider per account | ✅ Verified (no `plan`/`apply`) |
-| 13 | Terraform plan evidence | — | **Not produced.** No AWS credentials or account access in this environment | ❌ Not verified |
+| 9 | Pull-request CI workflow | `.github/workflows/ci.yml` | Run [`46059024569`](https://github.com/absshakeel/care-guide-devops/actions/runs/46059024569) — all 4 jobs green: Lint and Test, Hadolint, ShellCheck, Docker Build and Trivy Scan | ✅ Verified |
+| 10 | Secure release workflow with OIDC | `.github/workflows/release-deploy.yml` | Run [`46055719256`](https://github.com/absshakeel/care-guide-devops/actions/runs/46055719256) — OIDC auth, multi-arch build+push, SSM deploy reporting `InProgress`→`Success`, smoke test HTTP 200, rollback correctly skipped | ✅ Verified |
+| 11 | Terraform modules | `terraform/modules/{ecr,ec2,oidc}` | `terraform fmt -check` clean, `terraform validate` successful, and every module instantiated in a real `plan` | ✅ Verified |
+| 12 | Terraform environments + remote state | `terraform/environments/{staging,production}`, `terraform/bootstrap` | `fmt` clean, `validate` successful for all configs. OIDC provider deduplicated across the two environments (`create_oidc_provider` / `provider_arn`) — one provider per account. Both environments applied against the live account, and `plan -detailed-exitcode` returns exit `0` (*"No changes. Your infrastructure matches the configuration."*) | ✅ Verified (applied, plan clean) |
+| 13 | Terraform plan evidence | `terraform/environments/{staging,production}` | `terraform plan -detailed-exitcode` for **both** environments returns exit `0` with *"No changes. Your infrastructure matches the configuration."* — the live account matches the HCL | ✅ Verified |
 | 14 | Kubernetes manifests | `k8s/` (namespace, configmap, secret, deployment, service, hpa, ingress) | `kubeconform -strict`: 7 found, 7 valid, 0 invalid | ✅ Schema-validated |
 | 15 | Deployment, rolling update, rollback evidence | `k8s/deployment.yaml` (RollingUpdate, `preStop`, probes), `k8s/configmap.yaml` | Live minikube v1.35.1: `21,228` requests, `0` failures across the `0.1.0`→`0.2.0` rollout; `rollout undo` returned the Deployment to the prior ReplicaSet | ✅ Verified |
 | 16 | Prometheus scraping | `monitoring/prometheus/` | 3 targets `up` (app, node-exporter, cAdvisor) | ✅ Verified |
@@ -971,12 +988,11 @@ the evidence is command output from this session, or whether the item could not 
 | 24 | Security posture | non-root, read-only rootfs, dropped caps, no port 22, OIDC, immutable ECR tags | Reviewed against `k8s/` and `terraform/` | ✅ Verified by inspection |
 | 25 | Cost estimate | README AWS cost table | us-east-1 public pricing, 2024 basis | ⚠️ Estimate, not billed |
 
-**Summary:** 20 of 25 items carry a ✅ — 17 backed by real command output from a running process,
-2 by `terraform validate` only, and 1 (security posture) by code inspection. 4 are partial: the two
-CI workflows have never executed on GitHub, the systemd units were not started (no init system on the
-verification host), and the cost table is public pricing rather than a bill. 1 is unverified outright:
-Terraform `plan`/`apply`, which needs a real AWS account. Nothing in this table claims an output that
-was not actually produced.
+**Summary:** 23 of 25 items carry a ✅ — 21 backed by real command output from a running process or
+a live GitHub Actions run, 1 (security posture) by code inspection, and 1 (Terraform environments) by
+`plan`/`apply` against the live account. 2 remain partial: the systemd units were not started (no init
+system on the verification host), and the cost table is public pricing rather than an actual bill.
+Nothing in this table claims an output that was not actually produced.
 
 ### Required GitHub configuration
 
@@ -998,17 +1014,22 @@ No AWS access keys are stored — the release workflow assumes the role through 
 
 ### Remaining manual steps
 
-These require credentials, cloud spending, or a decision that is out of scope for automated setup:
+Everything below has already been done, and the exact commands are retained so the setup is reproducible
+on another account.
 
-1. **Publish the repository** to GitHub. The remote is already configured as `origin` → `https://github.com/absshakeel/care-guide-devops.git`; push with `git push -u origin main`.
-2. **Bootstrap Terraform state** — create the S3 bucket with `terraform/bootstrap`, using real AWS credentials. Locking uses the S3 backend's native `use_lockfile = true`, so no DynamoDB table is required.
-3. **Apply the environments** — `terraform plan` then `terraform apply` for staging, then production, after reviewing the plan. Staging must be applied first because it creates the account's GitHub OIDC provider; pass its `github_oidc_provider_arn` output to production as `oidc_provider_arn`.
-4. **Populate the GitHub secret and variables** listed above from the Terraform outputs.
-5. **Run the workflows** once on a real pull request and once on `main` to exercise the OIDC → ECR → SSM → smoke-test path end to end. This is the largest untested surface in the submission.
-6. **Deploy to a shared cluster** — the local minikube rehearsal is captured above. `terraform/environments/production` provisions a single EC2 instance for the SSM-based deploy path, not a cluster, so repeating the Kubernetes rehearsal on shared infrastructure requires an EKS cluster that is out of scope for this Terraform code — see the EKS differences table above and the EKS migration item under Improvements.
-7. **Install the systemd timer** on a Linux host if you want unattended checks — copy the units from `systemd/` as shown above and confirm `systemctl list-timers` shows the schedule.
-8. **Rotate the Grafana password** — the default `change_me_before_deploy` in `.env.example` must not reach a shared host.
-9. **Fill in the repository URL** — already set to `https://github.com/absshakeel/care-guide-devops.git` in the clone step above.
+| Step | Status |
+|------|--------|
+| Publish the repository (`origin` → `https://github.com/absshakeel/care-guide-devops.git`) | ✅ Done |
+| Bootstrap Terraform state in S3 (native `use_lockfile = true`, no DynamoDB table) | ✅ Done |
+| `terraform apply` for staging, then production (staging first — it creates the account's OIDC provider, whose ARN is passed to production as `oidc_provider_arn`) | ✅ Done — both plans now report "No changes" |
+| Populate the GitHub secret and variables from the Terraform outputs | ✅ Done — on the `production` environment |
+| Run the workflows on a real pull request and on `main` (OIDC → ECR → SSM → smoke test) | ✅ Done — runs `46059024569` (PR) and `46055719256` (release) |
+| Deploy to a shared cluster | ⏳ Not done — the local minikube rehearsal is captured above. `terraform/environments/production` provisions a single EC2 instance for the SSM deploy path, not a cluster; repeating the Kubernetes rehearsal on shared infrastructure needs an EKS cluster, which is out of scope for this Terraform code — see the EKS differences table and the EKS migration item under Improvements |
+| Install the systemd timer on a Linux host | ⏳ Not done — copy the units from `systemd/` and confirm `systemctl list-timers` shows the schedule |
+| Rotate the Grafana password | ⏳ Before any shared deployment — the default `change_me_before_deploy` in `.env.example` must not reach a shared host |
+
+**One risk to carry forward:** the AWS credentials used for the live deployment are the **account root**
+credentials. Replace them with a scoped IAM user or role before this account holds anything real.
 
 ---
 
@@ -1050,13 +1071,17 @@ The audit was not a rubber stamp; several defects only surfaced once the stack w
 7. `histogram_quantile` without `sum by (le)` emitted one series per label set, so "p50" appeared four times in the legend.
 8. The Disk Utilisation panel showed 23 duplicate series from Docker Desktop's mount namespaces; now aggregated to 4 real filesystems.
 9. Running Hadolint the way CI runs it (`.hadolint.yaml`, `failure-threshold: warning`) failed with `DL3025` on the `HEALTHCHECK` line — a warning-severity rule, so the `dockerfile-lint` job would have gone red on the first pull request. The probe genuinely needs shell form (`|| exit 1` and `${PORT}` expansion), so it is suppressed inline with a comment explaining why rather than rewritten into a JSON array that cannot work. Hadolint now exits `0`; only an `info`-level `DL3066` remains, which is below the threshold.
+10. `ssm:GetCommandInvocation` was granted on the EC2 instance and SSM document ARNs, but that action is authorised against the **command** ARN (`arn:aws:ssm:<region>:<account>:command/<id>`). All 39 status polls returned `AccessDenied`, and because the poll loop ended with `2>/dev/null || echo Pending`, the permission error was indistinguishable from "still running". A deployment that had in fact succeeded was reported as a five-minute timeout and a failed release. The statement is now split by resource type and the loop only treats `InvocationDoesNotExist` as *Pending*, failing loudly on anything else.
+11. `pip install -e ".[dev]"` could never have worked: `pyproject.toml` declared the build backend `setuptools.backends.legacy:build`, which is not a real module, so the install died with `ModuleNotFoundError: No module named 'setuptools.backends'`. It now uses `setuptools.build_meta:__legacy__`.
+12. Fixing the backend exposed a second, stacked failure — setuptools refused to guess between the flat layout's top-level directories (`error: Multiple top-level packages discovered in a flat-layout: ['app', 'k8s', 'systemd', 'terraform', 'monitoring']`). Package discovery is now declared explicitly with `[tool.setuptools] packages = ["app"]`.
+13. The `docker-scan` job could not start at all: `aquasecurity/trivy-action@0.29.0` does not exist (the project tags its releases `v0.29.0`), and even `@v0.29.0` is unusable because it pins `aquasecurity/setup-trivy@v0.2.2`, a tag deleted upstream. From `v0.31.0` onward the transitive dependency is pinned by commit SHA instead of a mutable tag. Pinned to `v0.36.0`.
+
+Defects 11–13 had been latent since the repository was first written and were invisible to every local check — the Docker image builds fine because the `Dockerfile` installs the runtime dependencies by name rather than building the project, and the `docker-scan` job only runs after `test` succeeds, so it had never been reached. They surfaced only on the first execution of the pull-request workflow. Defect 10 is the most instructive: the workflow's own error handling turned a success into a reported failure.
 
 **What could not be verified**
 
 Honesty about scope matters more than a clean claim. The following were **not** executed in this environment, and no output is fabricated for them:
 
-- No `terraform apply` and no interaction with a real AWS account. Only `fmt` and `validate` were run.
-- No GitHub Actions run — the workflows exist and are syntactically valid, but they have never executed on GitHub, and the OIDC/SSM/ECR path is therefore untested end to end.
 - No HPA scaling event was captured. The manifests pass `kubeconform -strict` (7/7), and the rollout, zero-downtime behaviour, and `kubectl rollout undo` were measured on a real minikube cluster (v1.35.1) — see the captured output above. Autoscaling under sustained load was not exercised.
 - The systemd units in `systemd/` were not started; the container used to exercise `system_health.sh` has no init system.
 - Hadolint is run locally the same way CI runs it (`hadolint/hadolint:latest --config .hadolint.yaml --failure-threshold warning`) and passes with exit `0`. Only an `info`-level `DL3066` remains, which does not fail the gate. Two `warning`-severity rules would otherwise fail it: `DL3025` is suppressed inline in the `Dockerfile` with a comment explaining why the probe cannot use JSON notation, and `DL3018` is ignored in `.hadolint.yaml` because the build intentionally runs `apk upgrade --no-cache` to pick up base-image fixes.

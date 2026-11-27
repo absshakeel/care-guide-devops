@@ -30,6 +30,7 @@ htmlcov/
 *.tfstate.backup
 *.tfplan
 terraform.tfvars
+terraform/bootstrap/bootstrap.tfvars
 !*.tfvars.example
 override.tf
 override.tf.json
