@@ -3,6 +3,9 @@ name: CI — Pull Request Checks
 on:
   pull_request:
     branches: [main]
+  # Lets the checks be re-run on demand from the Actions tab (or `gh workflow
+  # run ci.yml`) without having to open a pull request first.
+  workflow_dispatch:
 
 permissions:
   contents: read
