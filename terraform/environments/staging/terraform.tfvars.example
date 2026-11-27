@@ -1,6 +1,6 @@
 aws_region    = "us-east-1"
 environment   = "staging"
-ami_id        = "ami-0c02fb55956c7d316"   # Amazon Linux 2023 us-east-1 — verify before apply
+ami_id        = "ami-000d209a4fc9822c4"   # Amazon Linux 2023 kernel-default x86_64, us-east-1 (2023.12.20261127.0)
 instance_type = "t3.micro"
 github_org    = "absshakeel"
 github_repo   = "care-guide-devops"

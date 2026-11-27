@@ -12,7 +12,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "careguide-devops-tfstate-ACCOUNT_ID"
+    bucket       = "careguide-devops-tfstate-020947422426"
     key          = "production/terraform.tfstate"
     region       = "us-east-1"
     use_lockfile = true

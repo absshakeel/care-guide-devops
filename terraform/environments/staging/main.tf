@@ -14,7 +14,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "careguide-devops-tfstate-ACCOUNT_ID" # set in backend.tfvars
+    bucket = "careguide-devops-tfstate-020947422426"
     key    = "staging/terraform.tfstate"
     region = "us-east-1"
     # Native S3 locking — no DynamoDB table required (Terraform ≥ 1.10)
