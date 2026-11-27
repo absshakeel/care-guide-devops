@@ -467,6 +467,62 @@ Both examples ship with `create_oidc_provider = false` and the values already
 filled in for this account. Set it to `true` in staging only on a clean account
 with no provider yet.
 
+#### Trust policy accepts both subject formats
+
+GitHub embeds **immutable numeric owner and repository IDs** in the OIDC `sub`
+claim, so the subject GitHub actually sends is:
+
+```
+repo:absshakeel@105621292/care-guide-devops@1474774727:environment:production
+```
+
+A trust policy that matches only `repo:owner/repo:*` therefore matches nothing,
+and every run fails at `sts:AssumeRoleWithWebIdentity` with
+`Not authorized to perform sts:AssumeRoleWithWebIdentity` — even when the
+audience, provider, role ARN, `id-token: write` permission and repository name
+are all correct. This is the single easiest failure mode to misdiagnose.
+
+`terraform/modules/oidc` accepts both forms, matching the owner and repository
+names literally in each:
+
+```hcl
+"token.actions.githubusercontent.com:sub" = [
+  "repo:${var.github_org}/${var.github_repo}:*",
+  "repo:${var.github_org}@*/${var.github_repo}@*:*",
+]
+```
+
+To read the subject your own repository sends, inspect a rejected attempt:
+
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity \
+  --start-time "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --max-results 5 --query 'Events[].CloudTrailEvent' --output text |
+  grep -o 'repo:[^"]*'
+```
+
+#### SSM actions are scoped to different resource types
+
+`ssm:SendCommand` is authorised against the **target instance** and the
+**document**, but `ssm:GetCommandInvocation` — the call the workflow uses to poll
+the deployment — is authorised against the **command ARN** created by the send.
+Granting both actions on the instance and document ARNs therefore allows the
+deploy to run while every poll returns `AccessDenied`. The module grants them in
+separate statements for that reason:
+
+```hcl
+{ Action = "ssm:SendCommand",           Resource = concat(var.ec2_instance_arns, [...document/AWS-RunShellScript]) },
+{ Action = "ssm:GetCommandInvocation",  Resource = "arn:aws:ssm:${region}:${account}:*" },
+```
+
+The workflow deliberately does **not** swallow poll errors. Only the transient
+`InvocationDoesNotExist` (the invocation record lagging slightly behind the
+`send-command` response) is treated as "still pending"; any other error fails the
+step immediately. Masking it with `|| echo Pending` would turn a permission
+failure into a five-minute silent timeout that reports a successful deployment as
+a failure.
+
 ### Destroy infrastructure
 
 ```bash

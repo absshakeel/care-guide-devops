@@ -152,17 +152,22 @@ resource "aws_iam_role_policy" "github_actions" {
         ]
         Resource = var.ecr_repository_arns
       },
-      # SSM — send commands to specific instances
+      # SSM — send commands to specific instances. ssm:SendCommand accepts the
+      # instance and document ARNs, while ssm:GetCommandInvocation is authorised
+      # against the command ARN created by the send, so the two actions need
+      # separate statements.
       {
         Effect = "Allow"
-        Action = [
-          "ssm:SendCommand",
-          "ssm:GetCommandInvocation",
-        ]
+        Action = "ssm:SendCommand"
         Resource = concat(
           var.ec2_instance_arns,
           ["arn:aws:ssm:${data.aws_region.current.name}::document/AWS-RunShellScript"]
         )
+      },
+      {
+        Effect   = "Allow"
+        Action   = "ssm:GetCommandInvocation"
+        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
       },
       # EC2 — describe instances to get public DNS for smoke tests
       {
