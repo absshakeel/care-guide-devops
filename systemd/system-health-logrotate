@@ -1,0 +1,13 @@
+# Logrotate configuration for system_health.sh log
+# Install to /etc/logrotate.d/system_health
+
+/opt/careguide/health_log.txt {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 nobody nogroup
+}
+

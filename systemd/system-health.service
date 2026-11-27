@@ -1,0 +1,22 @@
+[Unit]
+Description=System Health Check
+Documentation=file:///opt/careguide/scripts/system_health.sh --help
+After=network.target
+
+[Service]
+Type=oneshot
+User=nobody
+Group=nogroup
+WorkingDirectory=/opt/careguide
+ExecStart=/opt/careguide/scripts/system_health.sh --json
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=system-health
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/careguide/health_log.txt
+PrivateTmp=true
+
