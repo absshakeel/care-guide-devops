@@ -1,0 +1,4 @@
+aws_region        = "us-east-1"
+state_bucket_name = "careguide-devops-tfstate-ACCOUNT_ID"
+project           = "careguide-devops"
+
