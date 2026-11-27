@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*.pyo
+.pytest_cache
+.coverage
+htmlcov/
+.ruff_cache/
+dist/
+build/
+
+# Environment and secrets
+.env
+*.env.local
+*.env.production
+
+# Terraform
+terraform/
+.terraform/
+
+# CI/CD
+.github/
+
+# Docs and tests (not needed in runtime image)
+docs/
+tests/
+README.md
+
+# Docker files (not needed inside image)
+docker-compose*.yml
+docker/
+
+# Kubernetes
+k8s/
+
+# Monitoring
+monitoring/
+
+# Scripts
+scripts/
+
+# Misc
+Makefile
+*.md

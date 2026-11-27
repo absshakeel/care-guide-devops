@@ -1,0 +1,14 @@
+# Hadolint configuration
+# See: https://github.com/hadolint/hadolint
+
+# Pin to specific version tags only — allow digest pinning (DL3007)
+ignore:
+  - DL3008   # apt-get: pin versions — not used (Alpine/pip only)
+  - DL3018   # apk: pin versions — handled explicitly in Dockerfile
+
+# Treat these as warnings rather than errors
+warning:
+  - DL3007   # Using latest is bad practice
+
+# Fail on CRITICAL and ERROR, warn on WARNING
+failure-threshold: warning
