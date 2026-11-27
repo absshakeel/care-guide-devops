@@ -41,7 +41,7 @@ devopstask/
 │   ├── ci.yml                    PR quality gates: lint, test, Hadolint, ShellCheck, Trivy
 │   └── release-deploy.yml        OIDC → ECR → SSM deploy → smoke test → rollback
 ├── terraform/
-│   ├── bootstrap/                S3 + DynamoDB remote state (run once)
+│   ├── bootstrap/                S3 remote state, native S3 locking (run once)
 │   ├── modules/
 │   │   ├── ecr/                  Repository, immutable tags, scan on push, lifecycle
 │   │   ├── ec2/                  Instance, security group (no port 22), IAM, CloudWatch
@@ -759,7 +759,7 @@ In the Alpine base image, `/etc/hosts` maps both `127.0.0.1 localhost` and `::1 
 EC2 was chosen because the assessment specifies SSM-based deployment and a single instance. ECS Fargate would simplify scheduling but adds cost and complexity beyond the scope. EKS is documented as the production Kubernetes target separately.
 
 **ECR with immutable image tags**  
-ECR is configured with `IMMUTABLE` tag mutability. This ensures that once a `sha-<hash>` tag is pushed, it cannot be overwritten — making rollbacks reliable. `latest` is also pushed for convenience but never used as the deployment reference.
+ECR is configured with `IMMUTABLE` tag mutability. This ensures that once a `sha-<hash>` or `v<semver>` tag is pushed, it cannot be overwritten — making rollbacks reliable. Note that ECR immutability applies to *all* tags in a repository: AWS does not allow a subset of tags to be mutable without exclusion filters (an AWS provider v6 feature). The release workflow therefore pushes only the immutable `sha-<hash>` and semver tags and does **not** push a floating `latest`, which would fail with `ImageTagAlreadyExistsException` on the second release.
 
 **OIDC instead of IAM access keys**  
 GitHub OIDC eliminates the need to store AWS credentials as GitHub secrets. The IAM role trust policy is scoped to the specific repository and can be further restricted to specific branches or environments.
@@ -913,7 +913,7 @@ No AWS access keys are stored — the release workflow assumes the role through 
 These require credentials, cloud spending, or a decision that is out of scope for automated setup:
 
 1. **Publish the repository** to GitHub, then repeat `git remote add origin <url>` and `git push -u origin main`. No remote is configured today.
-2. **Bootstrap Terraform state** — create the S3 bucket and DynamoDB lock table with `terraform/bootstrap`, using real AWS credentials.
+2. **Bootstrap Terraform state** — create the S3 bucket with `terraform/bootstrap`, using real AWS credentials. Locking uses the S3 backend's native `use_lockfile = true`, so no DynamoDB table is required.
 3. **Apply the environments** — `terraform plan` then `terraform apply` for staging, then production, after reviewing the plan.
 4. **Populate the GitHub secret and variables** listed above from the Terraform outputs.
 5. **Run the workflows** once on a real pull request and once on `main` to exercise the OIDC → ECR → SSM → smoke-test path end to end. This is the largest untested surface in the submission.
