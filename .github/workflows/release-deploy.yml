@@ -1,0 +1,243 @@
+name: Release — Build, Push, Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  id-token: write   # Required for GitHub OIDC → AWS authentication
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+  APP_PORT: "8080"
+
+jobs:
+  release:
+    name: Build, Push, Deploy
+    runs-on: ubuntu-24.04
+    environment: production
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------------------
+      # Authenticate to AWS using OIDC (no long-lived access keys)
+      # -------------------------------------------------------------------
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-release
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # -------------------------------------------------------------------
+      # Determine image tags
+      # -------------------------------------------------------------------
+      - name: Compute image tags
+        id: tags
+        run: |
+          REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+          REPO="${{ env.ECR_REPOSITORY }}"
+          SHA="${GITHUB_SHA::8}"
+
+          # Semantic version: use the git tag if present, else sha
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            SEM_VER="${GITHUB_REF#refs/tags/}"
+          else
+            SEM_VER="sha-${SHA}"
+          fi
+
+          echo "registry=${REGISTRY}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${REGISTRY}/${REPO}:sha-${SHA}" >> "$GITHUB_OUTPUT"
+          echo "semver_tag=${REGISTRY}/${REPO}:${SEM_VER}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${REGISTRY}/${REPO}:latest" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "sem_ver=${SEM_VER}" >> "$GITHUB_OUTPUT"
+
+      # -------------------------------------------------------------------
+      # Multi-platform build with BuildKit layer caching
+      # -------------------------------------------------------------------
+      - name: Set up QEMU (for arm64 cross-compilation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push multi-platform image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.tags.outputs.sha_tag }}
+            ${{ steps.tags.outputs.semver_tag }}
+            ${{ steps.tags.outputs.latest_tag }}
+          build-args: |
+            APP_VERSION=${{ steps.tags.outputs.sem_ver }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+      # -------------------------------------------------------------------
+      # Deploy to EC2 through AWS Systems Manager (no SSH required)
+      # -------------------------------------------------------------------
+      - name: Capture previous image tag for rollback
+        id: prev
+        run: |
+          # Retrieve the currently running image tag from the instance via SSM
+          RESULT=$(aws ssm send-command \
+            --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters '{"commands":["docker inspect careguide-app --format \"{{.Config.Image}}\" 2>/dev/null || echo none"]}' \
+            --query "Command.CommandId" \
+            --output text)
+
+          sleep 5
+
+          OUTPUT=$(aws ssm get-command-invocation \
+            --command-id "${RESULT}" \
+            --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+            --query "StandardOutputContent" \
+            --output text | tr -d '[:space:]')
+
+          echo "previous_image=${OUTPUT}" >> "$GITHUB_OUTPUT"
+          echo "Previous image: ${OUTPUT}"
+
+      - name: Deploy new image via SSM
+        id: deploy
+        run: |
+          SHA_TAG="${{ steps.tags.outputs.sha_tag }}"
+          REGISTRY="${{ steps.tags.outputs.registry }}"
+          REGION="${{ env.AWS_REGION }}"
+
+          # Write the remote script to a file first: the commands contain
+          # newlines and quotes, so hand-built JSON would be invalid. jq -Rs
+          # serialises the whole script into a single properly escaped
+          # commands[0] element.
+          cat > deploy.sh <<'EOF'
+          set -euo pipefail
+          aws ecr get-login-password --region REGION_PLACEHOLDER | \
+            docker login --username AWS --password-stdin REGISTRY_PLACEHOLDER
+          docker pull SHA_TAG_PLACEHOLDER
+          docker stop careguide-app 2>/dev/null || true
+          docker rm careguide-app 2>/dev/null || true
+          docker run -d \
+            --name careguide-app \
+            --restart unless-stopped \
+            -p 8080:8080 \
+            -e PORT=8080 \
+            -e ENVIRONMENT=production \
+            -e LOG_LEVEL=info \
+            SHA_TAG_PLACEHOLDER
+          EOF
+
+          sed -i \
+            -e "s|REGION_PLACEHOLDER|${REGION}|g" \
+            -e "s|REGISTRY_PLACEHOLDER|${REGISTRY}|g" \
+            -e "s|SHA_TAG_PLACEHOLDER|${SHA_TAG}|g" \
+            deploy.sh
+
+          PARAMS=$(jq -Rsc '{commands: [.]}' deploy.sh)
+          echo "Remote script to execute:"
+          cat deploy.sh
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "${PARAMS}" \
+            --timeout-seconds 300 \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "command_id=${CMD_ID}" >> "$GITHUB_OUTPUT"
+          echo "Deployment command ID: ${CMD_ID}"
+
+          # Wait for completion
+          for i in $(seq 1 30); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "${CMD_ID}" \
+              --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+              --query "Status" --output text)
+            echo "Status: ${STATUS}"
+            if [[ "${STATUS}" == "Success" ]]; then break; fi
+            if [[ "${STATUS}" == "Failed" || "${STATUS}" == "TimedOut" ]]; then
+              echo "Deployment failed with status: ${STATUS}"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      # -------------------------------------------------------------------
+      # Smoke test: verify /health responds correctly
+      # -------------------------------------------------------------------
+      - name: Smoke test /health endpoint
+        id: smoke
+        run: |
+          # Retrieve the public DNS of the instance
+          PUBLIC_DNS=$(aws ec2 describe-instances \
+            --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
+            --query "Reservations[0].Instances[0].PublicDnsName" \
+            --output text)
+
+          URL="http://${PUBLIC_DNS}:${{ env.APP_PORT }}/health"
+          echo "Probing: ${URL}"
+
+          for attempt in $(seq 1 10); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "${URL}" 2>/dev/null || echo "000")
+            echo "Attempt ${attempt}: HTTP ${STATUS}"
+            if [[ "${STATUS}" == "200" ]]; then
+              echo "Smoke test passed"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Smoke test failed after 10 attempts"
+          exit 1
+
+      # -------------------------------------------------------------------
+      # Rollback if deploy or smoke test failed
+      # -------------------------------------------------------------------
+      - name: Rollback to previous image
+        if: failure() && steps.prev.outputs.previous_image != 'none'
+        run: |
+          PREV="${{ steps.prev.outputs.previous_image }}"
+          echo "Rolling back to: ${PREV}"
+
+          cat > rollback.sh <<'EOF'
+          set -euo pipefail
+          docker stop careguide-app 2>/dev/null || true
+          docker rm careguide-app 2>/dev/null || true
+          docker run -d --name careguide-app --restart unless-stopped \
+            -p 8080:8080 \
+            -e PORT=8080 \
+            -e ENVIRONMENT=production \
+            PREV_PLACEHOLDER
+          EOF
+
+          sed -i "s|PREV_PLACEHOLDER|${PREV}|g" rollback.sh
+
+          PARAMS=$(jq -Rsc '{commands: [.]}' rollback.sh)
+          echo "Rollback script:"
+          cat rollback.sh
+
+          aws ssm send-command \
+            --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "${PARAMS}" \
+            --timeout-seconds 120
+          echo "Rollback initiated"
+
