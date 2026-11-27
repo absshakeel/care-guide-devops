@@ -62,6 +62,11 @@ EXPOSE 8080
 # Health check: probe /health every 30 s, allow 5 s start-up grace.
 # Use 127.0.0.1 rather than "localhost" — Alpine resolves localhost to ::1,
 # while uvicorn binds the IPv4 wildcard only, so "localhost" gets ECONNREFUSED.
+# DL3025 wants JSON notation, but this probe relies on shell `||` and `$PORT`
+# expansion and so cannot be expressed as a JSON array. HEALTHCHECK is the one
+# shell-form instruction in this file; the CMD below uses JSON form, which is
+# what matters for signal delivery.
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1:${PORT}/health || exit 1
 

@@ -2,7 +2,7 @@
 # See: https://github.com/hadolint/hadolint
 
 # Pin to specific version tags only — allow digest pinning (DL3007)
-ignore:
+ignored:
   - DL3008   # apt-get: pin versions — not used (Alpine/pip only)
   - DL3018   # apk: pin versions — handled explicitly in Dockerfile
 

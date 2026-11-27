@@ -53,3 +53,5 @@ health_log.txt
 
 # Kind kubeconfig
 kubeconfig-*.yaml
+
+prompt.md
