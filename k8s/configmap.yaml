@@ -11,6 +11,6 @@ data:
   ENVIRONMENT: "kubernetes"
   # APP_VERSION is deliberately NOT set here. It is baked into the image by the
   # release pipeline (--build-arg APP_VERSION=<semver>), and envFrom would
-  # silently override that with a stale value. The image tag is the single
-  # source of truth for the running version.
+  # silently override that with a stale value. The image's own ENV is
+  # authoritative for the version the process reports.
 

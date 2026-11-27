@@ -12,7 +12,7 @@ This repository contains a FastAPI microservice and all supporting infrastructur
 - Multi-stage Docker build producing a 37.6 MiB (39.4 MB) Alpine image
 - GitHub Actions CI/CD: pull-request quality checks and a secure release pipeline using OIDC (no long-lived access keys)
 - Terraform modules for ECR, EC2, and GitHub OIDC, organized into staging and production environments with S3 remote state
-- Kubernetes manifests with rolling updates, HPA, and security contexts, validated against the Kubernetes schema
+- Kubernetes manifests with rolling updates, HPA, and security contexts, applied to a live minikube cluster with a measured zero-downtime rollout and rollback
 - Full observability stack: Prometheus, Grafana (3 dashboards), Loki, Grafana Alloy, Node Exporter, cAdvisor
 - Bash health script with configurable thresholds, JSON output, and a systemd timer
 
@@ -129,6 +129,7 @@ The following tools are required. Versions listed are the ones this repository w
 | Docker Compose | v2.40.2 |
 | kubectl | v1.34.1 |
 | kind | v0.24+ (local Kubernetes; see note below) |
+| minikube | v1.38.1 / Kubernetes v1.35.1 (used for the rollout evidence) |
 | Terraform | ≥ 1.10 (validated with 1.10.5) |
 | Python | 3.12+ (CI and Docker use 3.12) |
 | git | 2.40+ |
@@ -140,10 +141,10 @@ AWS CLI v2 is required for Terraform operations.
 
 > [!NOTE]
 > **Kubernetes tooling is not required to run the application.** The manifests in `k8s/` were
-> validated with `kubeconform -strict` (7/7 resources valid) but were **not** rolled out to a live
-> cluster during this verification run — no kind or minikube cluster was provisioned. The
-> `kind` commands in the [Kubernetes](#kubernetes) section are the intended workflow, not a record
-> of executed output.
+> validated with `kubeconform -strict` (7/7 resources valid) **and applied to a real single-node
+> minikube cluster** (Kubernetes v1.35.1). The two-replica rollout, zero-downtime rolling update,
+> and `kubectl rollout undo` were executed; captured output is in the
+> [Kubernetes](#kubernetes) section. HPA scaling was not exercised.
 
 ---
 
@@ -241,14 +242,15 @@ curl http://localhost:8080/metrics
 docker build --tag careguide-devops-app:0.1.0 .
 ```
 
-**Measured image size:** `39,398,035 bytes ≈ 37.6 MiB` (Alpine 3.21 multi-stage build, `0 CRITICAL` vulnerabilities in Trivy)
+**Measured image size:** `39,398,514 bytes ≈ 37.6 MiB` (Alpine 3.21 multi-stage build, `0 CRITICAL` vulnerabilities in Trivy)
 
 > [!NOTE]
 > `docker images` may report a much larger figure (e.g. `160MB`) for this image. That column shows
 > **uncompressed on-disk size across all layers including the shared base**, and Docker Desktop's
 > containerd image store counts differently from the classic image store. The authoritative figure
 > is `docker image inspect careguide-devops-app:0.1.0 --format '{{.Size}}'`, which reports
-> `39398035`.
+> `39398514`. The build runs `apk upgrade --no-cache`, so this drifts by a few hundred bytes when the
+> Alpine package set moves — treat it as ±1 MB, not an exact constant.
 
 ### Docker Compose
 
@@ -447,21 +449,24 @@ terraform destroy -var-file="terraform.tfvars"
 ## Kubernetes
 
 > [!IMPORTANT]
-> The manifests in `k8s/` were validated with `kubeconform -strict` (7/7 resources valid) but were
-> **not applied to a running cluster** during this verification run. The commands below are the
-> intended workflow. Rollout, HPA scaling, and `kubectl rollout undo` behaviour is therefore
-> specified and schema-validated, not empirically demonstrated.
+> The manifests in `k8s/` were validated with `kubeconform -strict` (7/7 resources valid) **and
+> applied to a real single-node cluster (minikube, Kubernetes v1.35.1)**. The two-replica rollout,
+> the zero-downtime behaviour of the rolling update, and `kubectl rollout undo` were all executed and
+> the captured output is reproduced below. HPA scaling was not exercised (see the verification matrix).
 
-### Create a local kind cluster
+### Create a local cluster
+
+Either kind or minikube works; the captured output below is from minikube.
 
 ```bash
-# Install kind if not present
+# Option A: kind
 # https://kind.sigs.k8s.io/docs/user/quick-start/
-
 kind create cluster --name careguide
-
-# Load local image into kind (no registry push required)
 kind load docker-image careguide-devops-app:0.1.0 --name careguide
+
+# Option B: minikube
+minikube start --driver=docker
+minikube image load careguide-devops-app:0.1.0
 ```
 
 ### Deploy
@@ -489,43 +494,131 @@ curl http://localhost:8080/health
 # {"status":"healthy","version":"0.1.0","environment":"kubernetes"}
 ```
 
+> [!NOTE]
+> `port-forward` binds to a single pod, so it is fine for a manual `curl` but useless for measuring
+> availability — a rollout terminates that pod and the tunnel breaks. Availability must be measured
+> against the Service `ClusterIP` from inside the cluster, which is what the probe below does.
+
 ### Rolling update
 
 ```bash
-# Update image tag in deployment
 kubectl set image deployment/careguide-app \
   app=careguide-devops-app:0.2.0 \
   -n careguide
 
-# Monitor rollout
 kubectl rollout status deployment/careguide-app -n careguide
-kubectl get pods -n careguide -w
-
-# Verify both replicas are healthy after the update
-kubectl get pods -n careguide
 ```
+
+Captured output (`maxSurge: 1`, `maxUnavailable: 0`):
+
+```text
+deployment.apps/careguide-app image updated
+Waiting for deployment "careguide-app" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "careguide-app" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "careguide-app" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "careguide-app" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "careguide-app" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "careguide-app" rollout to finish: 1 old replicas are pending termination...
+deployment "careguide-app" successfully rolled out
+```
+
+`maxUnavailable: 0` means the old replica is only terminated *after* the new one reports Ready, so
+no request is served by a terminating pod. This was measured rather than assumed — an in-cluster
+probe pod hammered the `ClusterIP` Service continuously across the rollout:
+
+```text
+probe started duration=120s target=http://careguide-app.careguide.svc.cluster.local/
+t=15s total=2561 ok=2561 failed=0 v1=2561 v2=0
+t=30s total=5002 ok=5002 failed=0 v1=4546 v2=456
+t=45s total=7734 ok=7734 failed=0 v1=5091 v2=2643
+t=60s total=10379 ok=10379 failed=0 v1=5091 v2=5288
+t=75s total=13158 ok=13158 failed=0 v1=5091 v2=8067
+t=90s total=15798 ok=15798 failed=0 v1=5091 v2=10707
+t=105s total=18481 ok=18481 failed=0 v1=5091 v2=13390
+t=120s total=21228 ok=21228 failed=0 v1=5091 v2=16137
+SUMMARY total=21228 ok=21228 failed=0 v1=5091 v2=16137 other=0
+ZERO_DOWNTIME_CONFIRMED
+```
+
+21,228 requests, zero failures, with the response mix shifting from `0.1.0` to `0.2.0` mid-run —
+i.e. the probe stayed healthy straight through the transition.
+
+> [!NOTE]
+> Two defects surfaced only because this was measured on a real cluster, and both are fixed in this
+> repository:
+>
+> 1. **The `preStop` hook was missing.** Kubernetes removes a pod from the Service endpoints and
+>    sends `SIGTERM` concurrently, and endpoint removal propagates across kube-proxies
+>    asynchronously. Without a `preStop` delay the old pod could be killed while still in flight,
+>    which showed up as bursty connection resets during the rollout. `k8s/deployment.yaml` now
+>    sleeps 5 s in `preStop` before `SIGTERM` is delivered.
+> 2. **`k8s/configmap.yaml` hardcoded `APP_VERSION: "0.1.0"`.** Because the Deployment uses
+>    `envFrom.configMapRef`, that value **overrode** the version baked into the image by
+>    `--build-arg APP_VERSION`, so a `0.2.0` image reported `0.1.0`. The key has been removed so the
+>    image's own `ENV` is authoritative. (The `app.kubernetes.io/version` label in
+>    `k8s/deployment.yaml` is informational metadata for `kubectl get`; it does not reach the
+>    process, and it still reads `0.1.0` unless you re-apply the manifest with the new tag.)
 
 ### Rollback
 
 ```bash
-# Roll back to the previous ReplicaSet
-kubectl rollout undo deployment/careguide-app -n careguide
+kubectl -n careguide annotate deployment/careguide-app \
+  kubernetes.io/change-cause="careguide-devops-app:0.2.0" --overwrite
 
-# Verify
+kubectl rollout history deployment/careguide-app -n careguide
+kubectl rollout undo deployment/careguide-app -n careguide
 kubectl rollout status deployment/careguide-app -n careguide
-kubectl get pods -n careguide
 ```
+
+Captured output:
+
+```text
+deployment.apps/careguide-app annotated
+deployment.apps/careguide-app
+REVISION  CHANGE-CAUSE
+5         version 0.2.0
+6         version 0.2.0
+7         version 0.2.0
+8         careguide-devops-app:0.2.0
+deployment.apps/careguide-app rolled back
+Waiting for deployment "careguide-app" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "careguide-app" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "careguide-app" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "careguide-app" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "careguide-app" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "careguide-app" rollout to finish: 1 old replicas are pending termination...
+deployment "careguide-app" successfully rolled out
+```
+
+The Deployment returned to the previous ReplicaSet and the running version went back to `0.1.0`:
+
+```text
+NAME                             READY   IMAGE
+careguide-app-7f75fb9869-6k85v   true    careguide-devops-app:0.1.0
+careguide-app-7f75fb9869-788cc   true    careguide-devops-app:0.1.0
+
+$ kubectl -n careguide exec deploy/careguide-app -- wget -qO- http://127.0.0.1:8080/
+{"message":"Hello from DevOps Task!","status":"running","version":"0.1.0"}
+```
+
+`kubectl rollout undo` promotes the previous ReplicaSet by appending a new revision (8 → 9) that
+reuses the old pod template — it does not rewind the revision counter, so history stays append-only.
 
 ### Cleanup
 
 ```bash
 kubectl delete namespace careguide
+
+# Option A: kind
 kind delete cluster --name careguide
+
+# Option B: minikube (what the captured output above was recorded on)
+minikube stop
 ```
 
 ### EKS production differences
 
-| Concern | Local (kind) | EKS Production |
+| Concern | Local (kind/minikube) | EKS Production |
 |---------|-------------|----------------|
 | Ingress | nginx (manual) | AWS Load Balancer Controller with `alb.ingress.kubernetes.io` annotations |
 | Secrets | kubectl apply | External Secrets Operator reading from AWS Secrets Manager |
@@ -768,7 +861,7 @@ the evidence is command output from this session, or whether the item could not 
 | 2 | Unit tests with coverage gate | `tests/`, `pyproject.toml` (`fail_under = 80`) | `16 passed`, `97.53%` coverage | ✅ Verified |
 | 3 | Python lint and format | `ruff` config in `pyproject.toml` | `ruff check` clean, `ruff format --check` clean | ✅ Verified |
 | 4 | Structured JSON logging | `app/logging_config.py`, request middleware in `app/main.py` | Loki panel shows JSON lines; no plaintext duplicates | ✅ Verified |
-| 5 | Multi-stage, non-root, small image | `Dockerfile` | `39,398,035 bytes ≈ 37.6 MiB`; runs as `appuser` | ✅ Verified |
+| 5 | Multi-stage, non-root, small image | `Dockerfile` | `39,398,514 bytes ≈ 37.6 MiB`; runs as `appuser` | ✅ Verified |
 | 6 | Container image vulnerability scan | Trivy (CI + local) | `0` vulnerabilities, `0` CRITICAL | ✅ Verified |
 | 7 | Container health check | `Dockerfile` `HEALTHCHECK` + compose | Container reaches `(healthy)` | ✅ Verified |
 | 8 | Graceful shutdown | SIGTERM delegation in `app/main.py` | `docker stop` completes in `0.65 s` (was `30.76 s` forced kill) | ✅ Verified |
@@ -778,7 +871,7 @@ the evidence is command output from this session, or whether the item could not 
 | 12 | Terraform environments + remote state | `terraform/environments/{staging,production}`, `terraform/bootstrap` | `fmt` clean, `validate` successful for all configs | ✅ Verified (no `plan`/`apply`) |
 | 13 | Terraform plan evidence | — | **Not produced.** No AWS credentials or account access in this environment | ❌ Not verified |
 | 14 | Kubernetes manifests | `k8s/` (namespace, configmap, secret, deployment, service, hpa, ingress) | `kubeconform -strict`: 7 found, 7 valid, 0 invalid | ✅ Schema-validated |
-| 15 | Deployment, rolling update, rollback evidence | `k8s/deployment.yaml` (RollingUpdate, probes), `hpa.yaml` | **Not exercised** — no cluster was provisioned | ❌ Not verified |
+| 15 | Deployment, rolling update, rollback evidence | `k8s/deployment.yaml` (RollingUpdate, `preStop`, probes), `k8s/configmap.yaml` | Live minikube v1.35.1: `21,228` requests, `0` failures across the `0.1.0`→`0.2.0` rollout; `rollout undo` returned the Deployment to the prior ReplicaSet | ✅ Verified |
 | 16 | Prometheus scraping | `monitoring/prometheus/` | 3 targets `up` (app, node-exporter, cAdvisor) | ✅ Verified |
 | 17 | Alert rules | `monitoring/prometheus/rules/alerts.yml` | 4 rules loaded, `0` false-firing instances | ✅ Verified |
 | 18 | Grafana provisioning | `monitoring/grafana/provisioning/` | 2 datasources with stable UIDs, 3 dashboards auto-provisioned | ✅ Verified |
@@ -790,11 +883,12 @@ the evidence is command output from this session, or whether the item could not 
 | 24 | Security posture | non-root, read-only rootfs, dropped caps, no port 22, OIDC, immutable ECR tags | Reviewed against `k8s/` and `terraform/` | ✅ Verified by inspection |
 | 25 | Cost estimate | README AWS cost table | us-east-1 public pricing, 2024 basis | ⚠️ Estimate, not billed |
 
-**Summary:** 20 of 25 items are backed by real command output. 2 are schema/lint-validated but never
-executed in a live target environment (CI workflows, Kubernetes rollout). 1 requires a real AWS
-account (Terraform plan/apply). 1 is an estimate. The remaining gap is Kubernetes deploy evidence,
-which is the same limitation as the rollout row. Nothing in this table claims an output that was not
-actually produced.
+**Summary:** 20 of 25 items carry a ✅ — 17 backed by real command output from a running process,
+2 by `terraform validate` only, and 1 (security posture) by code inspection. 4 are partial: the two
+CI workflows have never executed on GitHub, the systemd units were not started (no init system on the
+verification host), and the cost table is public pricing rather than a bill. 1 is unverified outright:
+Terraform `plan`/`apply`, which needs a real AWS account. Nothing in this table claims an output that
+was not actually produced.
 
 ### Required GitHub configuration
 
@@ -823,7 +917,7 @@ These require credentials, cloud spending, or a decision that is out of scope fo
 3. **Apply the environments** — `terraform plan` then `terraform apply` for staging, then production, after reviewing the plan.
 4. **Populate the GitHub secret and variables** listed above from the Terraform outputs.
 5. **Run the workflows** once on a real pull request and once on `main` to exercise the OIDC → ECR → SSM → smoke-test path end to end. This is the largest untested surface in the submission.
-6. **Deploy to a cluster** — `kind create cluster` (or point at an EKS cluster) following the Kubernetes section, and confirm two replicas reach `2/2 Running`, then rehearse `kubectl rollout undo`.
+6. **Deploy to a shared cluster** — the local minikube rehearsal is captured above; repeat it against the EKS cluster from `terraform/environments/production` (or `kind` for a quick check) to confirm the same `2/2 Running` and zero-downtime behaviour on the target infrastructure.
 7. **Install the systemd timer** on a Linux host if you want unattended checks — copy the units from `systemd/` as shown above and confirm `systemctl list-timers` shows the schedule.
 8. **Rotate the Grafana password** — the default `change_me_before_deploy` in `.env.example` must not reach a shared host.
 9. **Fill in the repository URL** in this README's clone step once the repository is public.
@@ -875,8 +969,8 @@ Honesty about scope matters more than a clean claim. The following were **not** 
 
 - No `terraform apply` and no interaction with a real AWS account. Only `fmt` and `validate` were run.
 - No GitHub Actions run — the workflows exist and are syntactically valid, but they have never executed on GitHub, and the OIDC/SSM/ECR path is therefore untested end to end.
-- No live Kubernetes cluster. The manifests pass `kubeconform -strict` (7/7) but no rollout, HPA scaling, or `kubectl rollout undo` was performed.
+- No HPA scaling event was captured. The manifests pass `kubeconform -strict` (7/7), and the rollout, zero-downtime behaviour, and `kubectl rollout undo` were measured on a real minikube cluster (v1.35.1) — see the captured output above. Autoscaling under sustained load was not exercised.
 - The systemd units in `systemd/` were not started; the container used to exercise `system_health.sh` has no init system.
-- Hadolint is run locally the same way CI runs it (`hadolint/hadolint:latest --failure-threshold warning`) and passes with exit `0`. Only an `info`-level `DL3066` remains, which does not fail the gate. The single `warning` it used to raise is suppressed inline in the `Dockerfile` with a comment explaining why the probe cannot use JSON notation.
+- Hadolint is run locally the same way CI runs it (`hadolint/hadolint:latest --config .hadolint.yaml --failure-threshold warning`) and passes with exit `0`. Only an `info`-level `DL3066` remains, which does not fail the gate. Two `warning`-severity rules would otherwise fail it: `DL3025` is suppressed inline in the `Dockerfile` with a comment explaining why the probe cannot use JSON notation, and `DL3018` is ignored in `.hadolint.yaml` because the build intentionally runs `apk upgrade --no-cache` to pick up base-image fixes.
 
 All measured numbers in this README (image size, test counts, coverage, shutdown time, vulnerability counts, target health) come from actual command output during the verification session. Where a figure could not be measured, that is stated explicitly instead of being invented.
