@@ -1,0 +1,89 @@
+groups:
+  # ---------------------------------------------------------------------------
+  # Application alerts
+  # ---------------------------------------------------------------------------
+  - name: careguide_app
+    interval: 30s
+    rules:
+      # Alert 1: Application instance unavailable
+      # Fires when no /health probe has succeeded for 2 minutes.
+      # Threshold: target is down (up == 0).
+      # Rationale: any sustained downtime of the application endpoint is a
+      # production incident requiring immediate attention.
+      # Action: check the container/instance; inspect logs; roll back if needed.
+      - alert: AppInstanceDown
+        expr: up{job="careguide-app"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Application instance is unreachable"
+          description: "{{ $labels.instance }} has been down for more than 2 minutes."
+
+      # Alert 2: High application error rate
+      # Fires when >5% of HTTP responses in the last 5 minutes are errors.
+      # Threshold: 5% is a generous allowance for transient errors; above this
+      # level errors are likely user-visible and require investigation.
+      # Action: inspect Loki logs for error patterns; check upstream dependencies.
+      - alert: AppHighErrorRate
+        expr: >
+          (
+            rate(http_errors_total[5m])
+            /
+            rate(http_requests_total[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Application error rate above 5%"
+          description: "Error rate is {{ $value | humanizePercentage }} on {{ $labels.instance }}."
+
+  # ---------------------------------------------------------------------------
+  # Host alerts
+  # ---------------------------------------------------------------------------
+  - name: careguide_host
+    interval: 60s
+    rules:
+      # Alert 3: Host disk utilisation above 80%
+      # Threshold: 80% leaves a reasonable buffer before the disk fills.
+      # At 90%+ many filesystems become unstable. Alert at 80% to allow
+      # proactive cleanup before an emergency.
+      # Action: identify large directories (du -sh /*); clean logs or extend EBS.
+      - alert: HostDiskUsageHigh
+        expr: >
+          (
+            1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+                 / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"})
+          ) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage above 80% on {{ $labels.mountpoint }}"
+          description: "Disk at {{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full."
+
+  # ---------------------------------------------------------------------------
+  # Container alerts
+  # ---------------------------------------------------------------------------
+  - name: careguide_containers
+    interval: 30s
+    rules:
+      # Alert 4: Container memory approaching its limit
+      # Fires when a container uses more than 85% of its memory limit.
+      # Threshold: at 85% the container is at risk of OOMKill, which causes
+      # service interruption without a graceful shutdown.
+      # Action: check for memory leaks; increase limits in deployment manifests.
+      - alert: ContainerMemoryNearLimit
+        expr: >
+          (
+            container_memory_working_set_bytes{name!=""}
+            / (container_spec_memory_limit_bytes{name!=""} > 0)
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} memory above 85% of limit"
+          description: "Memory usage is {{ $value | humanizePercentage }} of the configured limit."
+

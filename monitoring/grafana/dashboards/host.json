@@ -1,0 +1,151 @@
+{
+  "title": "Host Metrics",
+  "uid": "careguide-host",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU Utilisation (%)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "{{instance}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "careguide-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100
+        }
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "careguide-prometheus"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Memory Usage (bytes)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
+          "legendFormat": "Used",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "careguide-prometheus"
+          }
+        },
+        {
+          "expr": "node_memory_MemTotal_bytes",
+          "legendFormat": "Total",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "careguide-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "careguide-prometheus"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Disk Utilisation (%)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "max by (device) ((1 - node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs|fuse.*|rootfs\"} / (node_filesystem_size_bytes{fstype!~\"tmpfs|overlay|squashfs|fuse.*|rootfs\"} > 0)) * 100)",
+          "legendFormat": "{{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "careguide-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100
+        }
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "careguide-prometheus"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Network Traffic (bytes/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(node_network_receive_bytes_total{device!~\"lo|veth.*\"}[5m])",
+          "legendFormat": "rx {{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "careguide-prometheus"
+          }
+        },
+        {
+          "expr": "rate(node_network_transmit_bytes_total{device!~\"lo|veth.*\"}[5m])",
+          "legendFormat": "tx {{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "careguide-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "careguide-prometheus"
+      }
+    }
+  ]
+}

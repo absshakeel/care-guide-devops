@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Application metrics
+  - job_name: careguide-app
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+        labels:
+          service: careguide-app
+
+  # Node Exporter — host metrics
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # cAdvisor — container metrics
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    metric_relabel_configs:
+      # Drop high-cardinality cAdvisor metrics not used in dashboards
+      - source_labels: [__name__]
+        regex: "container_(tasks_state|memory_failures_total)"
+        action: drop
+
