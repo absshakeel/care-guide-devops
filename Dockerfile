@@ -30,10 +30,14 @@ FROM python:3.12.9-alpine3.21 AS runtime
 # Patch any OS-level CVEs in the base image
 RUN apk upgrade --no-cache
 
+# Build-time version, injected by CI (see .github/workflows/release-deploy.yml).
+# The default keeps local `docker build` without arguments working.
+ARG APP_VERSION=0.1.0
+
 # OCI image labels
 LABEL org.opencontainers.image.title="careguide-devops-app" \
       org.opencontainers.image.description="FastAPI service for Care Guide DevOps assessment" \
-      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.source="https://github.com/careguide/devops-task" \
       org.opencontainers.image.licenses="MIT"
 
@@ -55,7 +59,7 @@ USER appuser
 ENV PORT=8080 \
     LOG_LEVEL=info \
     ENVIRONMENT=production \
-    APP_VERSION=0.1.0
+    APP_VERSION=${APP_VERSION}
 
 EXPOSE 8080
 
