@@ -105,8 +105,18 @@ resource "aws_iam_role" "github_actions" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          # Restrict to specific repository and any branch/tag
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
+          # Restrict to this repository, any branch or tag.
+          #
+          # GitHub embeds the immutable numeric owner/repo IDs in the OIDC
+          # `sub` claim (repo:owner@123/repo@456:environment:production), so a
+          # name-only pattern silently stops matching and every workflow fails
+          # with "Not authorized to perform sts:AssumeRoleWithWebIdentity".
+          # Accept both the ID-qualified and the plain name form; the owner and
+          # repository names are matched literally in either case.
+          "token.actions.githubusercontent.com:sub" = [
+            "repo:${var.github_org}/${var.github_repo}:*",
+            "repo:${var.github_org}@*/${var.github_repo}@*:*",
+          ]
         }
       }
     }]
