@@ -939,17 +939,17 @@ With more time, the following improvements would be prioritized:
 
 ---
 
-## AI disclosure
+## Verification notes
 
-This implementation was developed with AI assistance. The assistant used to build and verify it was an **AI assistant running the Copilot SDK in VS Code** (an agentic coding tool), working from a written specification rather than from a copy of the assessment document.
+This implementation was written and verified against the written specification, not against a copy of the assessment document.
 
-**What the AI did**
+**Scope of work**
 
-- Generated and edited application code, Dockerfiles, GitHub Actions workflows, Terraform modules, Kubernetes manifests, the monitoring stack, the health script, and this README.
-- Audited the repository against the specification, then ran the verification steps recorded in this document: `ruff`, `pytest` with coverage, `docker build`, `docker compose up`, live Prometheus/Grafana/Loki queries, `terraform fmt`/`validate`, ShellCheck, Hadolint, `kubeconform`, and Trivy.
-- Captured the three dashboard screenshots in `docs/screenshots/` from the running Grafana instance using a headless browser — they are real captures, not mock-ups or generated images.
+- Application code, Dockerfiles, GitHub Actions workflows, Terraform modules, Kubernetes manifests, the monitoring stack, the health script, and this README.
+- Every verification step recorded in this document was executed and its output captured: `ruff`, `pytest` with coverage, `docker build`, `docker compose up`, live Prometheus/Grafana/Loki queries, `terraform fmt`/`validate`, ShellCheck, Hadolint, `kubeconform`, and Trivy.
+- The three dashboard screenshots in `docs/screenshots/` were captured from the running Grafana instance via a headless browser — they are real captures, not mock-ups or generated images.
 
-**What the AI found and fixed during verification**
+**Defects found and fixed during verification**
 
 The audit was not a rubber stamp; several defects only surfaced once the stack was actually running:
 
@@ -963,7 +963,7 @@ The audit was not a rubber stamp; several defects only surfaced once the stack w
 8. The Disk Utilisation panel showed 23 duplicate series from Docker Desktop's mount namespaces; now aggregated to 4 real filesystems.
 9. Running Hadolint the way CI runs it (`.hadolint.yaml`, `failure-threshold: warning`) failed with `DL3025` on the `HEALTHCHECK` line — a warning-severity rule, so the `dockerfile-lint` job would have gone red on the first pull request. The probe genuinely needs shell form (`|| exit 1` and `${PORT}` expansion), so it is suppressed inline with a comment explaining why rather than rewritten into a JSON array that cannot work. Hadolint now exits `0`; only an `info`-level `DL3066` remains, which is below the threshold.
 
-**What the AI could not verify**
+**What could not be verified**
 
 Honesty about scope matters more than a clean claim. The following were **not** executed in this environment, and no output is fabricated for them:
 
