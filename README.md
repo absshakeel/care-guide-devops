@@ -2,6 +2,8 @@
 
 A complete DevOps workflow implementation covering application containerization, CI/CD, AWS infrastructure, Kubernetes, observability, and Linux automation.
 
+> **Live deployment:** <http://3.93.218.137:8080/> — the service running on the production EC2 instance provisioned by `terraform/environments/production`. `/health` and `/metrics` are reachable on the same host. This instance is expected to be destroyed shortly after review, at which point this link will stop responding; the release workflow logs referenced below remain the permanent evidence.
+
 ---
 
 ## Overview
@@ -1090,3 +1092,19 @@ Honesty about scope matters more than a clean claim. The following were **not** 
 - Hadolint is run locally the same way CI runs it (`hadolint/hadolint:latest --config .hadolint.yaml --failure-threshold warning`) and passes with exit `0`. Only an `info`-level `DL3066` remains, which does not fail the gate. Two `warning`-severity rules would otherwise fail it: `DL3025` is suppressed inline in the `Dockerfile` with a comment explaining why the probe cannot use JSON notation, and `DL3018` is ignored in `.hadolint.yaml` because the build intentionally runs `apk upgrade --no-cache` to pick up base-image fixes.
 
 All measured numbers in this README (image size, test counts, coverage, shutdown time, vulnerability counts, target health) come from actual command output during the verification session. Where a figure could not be measured, that is stated explicitly instead of being invented.
+
+---
+
+## Note on AI tool usage
+
+AI tools were used during this assessment, and the task allows this as long as every part can be explained.
+
+An agentic coding assistant running in VS Code was used for code generation and editing across the application, Dockerfiles, GitHub Actions workflows, Terraform modules, Kubernetes manifests, the monitoring stack, the health script, and this README. It also ran the verification steps recorded above and captured their output.
+
+What that means in practice:
+
+- **The design decisions are mine**, and the trade-offs in [Design decisions](#design-decisions) are the reasoning I would defend in a review — for example choosing EC2 + SSM over ECS/EKS for the deployment target, distroless vs Alpine, OIDC over static keys, and the low-cardinality Loki label set.
+- **The defects listed above were found by running the stack, not by inspection**, and each fix is understood rather than pasted: the `SIGTERM` handler delegating to uvicorn, the IPv6-vs-IPv4 healthcheck, the `GetCommandInvocation` resource ARN, and the `setuptools` build backend failures are all reproducible from the commands in this document.
+- **Where AI assistance was insufficient, it is stated.** The "What could not be verified" section records the gaps rather than papering over them — no HPA scaling event was captured, and the systemd units were never started.
+
+I can walk through any file, command, or failure mode in this repository on request.
