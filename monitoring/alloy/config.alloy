@@ -1,0 +1,89 @@
+// Grafana Alloy configuration
+// Collects logs from all Docker containers using Docker service discovery
+// and forwards them to Loki.
+//
+// Label strategy:
+//   - container_name: identifies the source container
+//   - compose_service: Docker Compose service name
+//   - level: extracted from structured JSON logs (info/warning/error)
+//   - path: HTTP request path (extracted from app logs only)
+//
+// Cardinality note: request IDs, trace IDs, user IDs, and full URLs are
+// intentionally NOT used as labels. High-cardinality values belong in the
+// log line body, not in Loki label sets.
+
+// Docker service discovery — enumerate containers
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+  refresh_interval = "15s"
+}
+
+// Relabel discovered containers to Loki labels
+discovery.relabel "docker_containers" {
+  targets = discovery.docker.containers.targets
+
+  // Use the container name without the leading slash
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container_name"
+  }
+
+  // Docker Compose service name
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+
+  // Drop containers that have no Compose service label (system containers)
+  rule {
+    source_labels = ["compose_service"]
+    regex         = ""
+    action        = "drop"
+  }
+}
+
+// Collect logs from each discovered container
+loki.source.docker "containers" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.docker_containers.output
+
+  forward_to = [loki.process.app_logs.receiver]
+}
+
+// Parse structured JSON logs from the application container
+loki.process "app_logs" {
+  // Attempt to parse JSON; non-JSON lines pass through unmodified
+  stage.json {
+    expressions = {
+      level   = "level",
+      message = "message",
+      path    = "path",
+    }
+  }
+
+  // Promote log level to a Loki label for dashboard filtering
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
+  // Keep path only as a structured field inside the log line,
+  // not as a label (unbounded cardinality).
+  stage.structured_metadata {
+    values = {
+      path = "",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// Write to Loki
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
