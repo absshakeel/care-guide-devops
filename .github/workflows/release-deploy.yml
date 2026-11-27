@@ -56,11 +56,13 @@ jobs:
             SEM_VER="sha-${SHA}"
           fi
 
-          echo "registry=${REGISTRY}" >> "$GITHUB_OUTPUT"
-          echo "sha_tag=${REGISTRY}/${REPO}:sha-${SHA}" >> "$GITHUB_OUTPUT"
-          echo "semver_tag=${REGISTRY}/${REPO}:${SEM_VER}" >> "$GITHUB_OUTPUT"
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "sem_ver=${SEM_VER}" >> "$GITHUB_OUTPUT"
+          {
+            echo "registry=${REGISTRY}"
+            echo "sha_tag=${REGISTRY}/${REPO}:sha-${SHA}"
+            echo "semver_tag=${REGISTRY}/${REPO}:${SEM_VER}"
+            echo "sha=${SHA}"
+            echo "sem_ver=${SEM_VER}"
+          } >> "$GITHUB_OUTPUT"
 
       # -------------------------------------------------------------------
       # Multi-platform build with BuildKit layer caching
@@ -96,23 +98,43 @@ jobs:
         id: prev
         run: |
           # Retrieve the currently running image tag from the instance via SSM
-          RESULT=$(aws ssm send-command \
+          CMD_ID=$(aws ssm send-command \
             --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
             --parameters '{"commands":["docker inspect careguide-app --format \"{{.Config.Image}}\" 2>/dev/null || echo none"]}' \
             --query "Command.CommandId" \
             --output text)
 
-          sleep 5
+          # Poll until the invocation is terminal. Reading the output of a
+          # still-pending command yields an empty string, and an empty value
+          # must never be mistaken for a rollback target.
+          STATUS=Pending
+          for _ in $(seq 1 12); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "${CMD_ID}" \
+              --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+              --query "Status" --output text 2>/dev/null || echo Pending)
+            case "${STATUS}" in
+              Success|Failed|TimedOut|Cancelled) break ;;
+            esac
+            sleep 5
+          done
 
-          OUTPUT=$(aws ssm get-command-invocation \
-            --command-id "${RESULT}" \
-            --instance-id "${{ env.EC2_INSTANCE_ID }}" \
-            --query "StandardOutputContent" \
-            --output text | tr -d '[:space:]')
+          PREV=""
+          if [[ "${STATUS}" == "Success" ]]; then
+            PREV=$(aws ssm get-command-invocation \
+              --command-id "${CMD_ID}" \
+              --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+              --query "StandardOutputContent" \
+              --output text | tr -d '[:space:]')
+          fi
 
-          echo "previous_image=${OUTPUT}" >> "$GITHUB_OUTPUT"
-          echo "Previous image: ${OUTPUT}"
+          # No container yet, or the probe did not report back: nothing to
+          # roll back to.
+          if [[ -z "${PREV}" ]]; then PREV="none"; fi
+
+          echo "previous_image=${PREV}" >> "$GITHUB_OUTPUT"
+          echo "Previous image: ${PREV}"
 
       - name: Deploy new image via SSM
         id: deploy
@@ -164,19 +186,27 @@ jobs:
           echo "Deployment command ID: ${CMD_ID}"
 
           # Wait for completion
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "${CMD_ID}" \
               --instance-id "${{ env.EC2_INSTANCE_ID }}" \
-              --query "Status" --output text)
+              --query "Status" --output text 2>/dev/null || echo Pending)
             echo "Status: ${STATUS}"
             if [[ "${STATUS}" == "Success" ]]; then break; fi
-            if [[ "${STATUS}" == "Failed" || "${STATUS}" == "TimedOut" ]]; then
+            if [[ "${STATUS}" == "Failed" || "${STATUS}" == "TimedOut" || "${STATUS}" == "Cancelled" ]]; then
               echo "Deployment failed with status: ${STATUS}"
               exit 1
             fi
             sleep 10
           done
+
+          # The loop also exits without break after 30 iterations; treat
+          # anything other than Success as a failure so the smoke test and the
+          # rollback step are not skipped.
+          if [[ "${STATUS}" != "Success" ]]; then
+            echo "Deployment did not reach Success (last status: ${STATUS})"
+            exit 1
+          fi
 
       # -------------------------------------------------------------------
       # Smoke test: verify /health responds correctly
@@ -207,10 +237,12 @@ jobs:
           exit 1
 
       # -------------------------------------------------------------------
-      # Rollback if deploy or smoke test failed
+      # Rollback if deploy or smoke test failed. `always()` is required:
+      # success() is implicitly ANDed onto every `if`, so a bare
+      # `failure() && ...` condition is unreachable.
       # -------------------------------------------------------------------
       - name: Rollback to previous image
-        if: failure() && steps.prev.outputs.previous_image != 'none'
+        if: ${{ always() && failure() && steps.prev.outputs.previous_image != 'none' && steps.prev.outputs.previous_image != '' }}
         run: |
           PREV="${{ steps.prev.outputs.previous_image }}"
           echo "Rolling back to: ${PREV}"
